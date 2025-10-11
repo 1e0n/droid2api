@@ -72,15 +72,21 @@ export function serverAuthMiddleware(req, res, next) {
     });
   }
 
-  // Accept key via header or query
-  const provided = req.headers['x-server-key'] || req.query.key || req.query.server_key;
+  // Accept key via Authorization: Bearer <key>
+  const authHeader = req.headers['authorization'];
+  let provided = null;
+  if (typeof authHeader === 'string') {
+    const parts = authHeader.split(' ');
+    if (parts.length === 2 && /^Bearer$/i.test(parts[0])) {
+      provided = parts[1];
+    }
+  }
   if (!verifyServerKey(typeof provided === 'string' ? provided : '')) {
     return res.status(401).json({
       error: 'Unauthorized',
-      message: 'Missing or invalid X-Server-Key (or ?key=)'
+      message: 'Missing or invalid Authorization: Bearer <server-key>'
     });
   }
 
   return next();
 }
-

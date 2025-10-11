@@ -13,7 +13,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, X-Server-Key, anthropic-version');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, anthropic-version, X-Endpoint-Authorization');
   
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);

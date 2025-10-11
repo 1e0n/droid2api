@@ -104,9 +104,12 @@ async function handleChatCompletions(req, res) {
     logInfo(`Routing to ${model.type} endpoint: ${endpoint.base_url}`);
 
     // Get API key (will auto-refresh if needed)
+    // When server access key is enabled, Authorization header is reserved for server auth.
+    // To pass a client-provided upstream token (client mode), use X-Endpoint-Authorization.
     let authHeader;
     try {
-      authHeader = await getApiKey(req.headers.authorization);
+      const clientUpstreamAuth = req.headers['x-endpoint-authorization'] || null;
+      authHeader = await getApiKey(clientUpstreamAuth);
     } catch (error) {
       logError('Failed to get API key', error);
       return res.status(500).json({ 
@@ -269,7 +272,8 @@ async function handleDirectResponses(req, res) {
       const clientAuthFromXApiKey = req.headers['x-api-key']
         ? `Bearer ${req.headers['x-api-key']}`
         : null;
-      authHeader = await getApiKey(req.headers.authorization || clientAuthFromXApiKey);
+      const clientUpstreamAuth = req.headers['x-endpoint-authorization'] || null;
+      authHeader = await getApiKey(clientUpstreamAuth || clientAuthFromXApiKey);
     } catch (error) {
       logError('Failed to get API key', error);
       return res.status(500).json({ 
@@ -408,7 +412,8 @@ async function handleDirectMessages(req, res) {
       const clientAuthFromXApiKey = req.headers['x-api-key']
         ? `Bearer ${req.headers['x-api-key']}`
         : null;
-      authHeader = await getApiKey(req.headers.authorization || clientAuthFromXApiKey);
+      const clientUpstreamAuth = req.headers['x-endpoint-authorization'] || null;
+      authHeader = await getApiKey(clientUpstreamAuth || clientAuthFromXApiKey);
     } catch (error) {
       logError('Failed to get API key', error);
       return res.status(500).json({ 
@@ -549,7 +554,7 @@ router.get('/status', (req, res) => {
           <h1>droid2api v2.0.0 Status</h1>
           <div class="card">
             <div class="warn">
-              <p><strong>First-time setup:</strong> Set a server access key. After saving, all endpoints require this key via header <code>X-Server-Key</code> or query <code>?key=</code>. The /status page remains open.</p>
+              <p><strong>First-time setup:</strong> Set a server access key. After saving, all endpoints require this key via header <code>Authorization: Bearer &lt;key&gt;</code>. The /status page remains open.</p>
             </div>
             <form method="POST" action="/status/set-key">
               <label for="key">Server Access Key</label>
@@ -776,12 +781,13 @@ router.get('/status', (req, res) => {
           <h2>Configuration</h2>
           <div class="info">
             <div class="notice">
-              <p><strong>Access Control:</strong> Server key is set. Provide header <code>X-Server-Key</code> or query <code>?key=</code> for all endpoints except <code>/status</code>.</p>
+              <p><strong>Access Control:</strong> Server key is set. Provide header <code>Authorization: Bearer &lt;key&gt;</code> for all endpoints except <code>/status</code>.</p>
             </div>
             <p><strong>Round-Robin Algorithm:</strong> <code>${stats.algorithm}</code></p>
             <p><strong>Remove on 402:</strong> <code>${stats.removeOn402 ? 'Enabled' : 'Disabled'}</code></p>
             <p><strong>Active Keys:</strong> ${stats.keys.length}</p>
             <p><strong>Deprecated Keys:</strong> ${stats.deprecatedKeys ? stats.deprecatedKeys.length : 0}</p>
+            <p><strong>Client-Auth (optional):</strong> If you rely on client-provided upstream tokens, send them via header <code>X-Endpoint-Authorization: Bearer &lt;upstream-token&gt;</code>. The <code>Authorization</code> header is reserved for the server access key.</p>
           </div>
         </div>
         
@@ -919,7 +925,7 @@ router.post('/status/set-key', (req, res) => {
       <body>
         <div class="card">
           <h3>Server key saved successfully.</h3>
-          <p>Use header <code>X-Server-Key</code> or query <code>?key=</code> with this key for all API requests (except <code>/status</code>).</p>
+          <p>Use header <code>Authorization: Bearer &lt;key&gt;</code> for all API requests (except <code>/status</code>).</p>
           <p><a href="/status">Go to Status</a></p>
         </div>
       </body>
