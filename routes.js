@@ -581,7 +581,7 @@ router.get('/status', (req, res) => {
           <style>
             body {
               font-family: Arial, sans-serif;
-              max-width: 1200px;
+              max-width: 1600px;
               margin: 50px auto;
               padding: 20px;
               background-color: #f5f5f5;
@@ -622,7 +622,7 @@ router.get('/status', (req, res) => {
         <style>
           body {
             font-family: Arial, sans-serif;
-            max-width: 1200px;
+            max-width: 1600px;
             margin: 50px auto;
             padding: 20px;
             background-color: #f5f5f5;
@@ -655,11 +655,27 @@ router.get('/status', (req, res) => {
             border-collapse: collapse;
             margin-top: 20px;
           }
+          th, td { vertical-align: middle; }
+          .btn { background: #4CAF50; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+          .btn:hover { filter: brightness(0.95); }
+          .btn-refresh { background: #2196F3; }
+          .btn-refresh:hover { background: #1976D2; }
+          .btn { white-space: nowrap; display: inline-block; }
+          .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+          .controls { display: flex; gap: 10px; align-items: center; margin: 8px 0 12px; flex-wrap: wrap; }
+          .controls label { color: #444; }
+          .controls input[type="number"] { width: 80px; padding: 6px; border: 1px solid #ccc; border-radius: 6px; }
+          .number { text-align: right; font-variant-numeric: tabular-nums; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif; letter-spacing: normal; }
+          .date { color: #555; font-family: monospace; }
+          .nowrap { white-space: nowrap; }
+          code { background: #f1f3f5; padding: 6px 10px; border-radius: 6px; display: inline-block; }
+          tr.depleted td { opacity: 0.7; background: #f8f9fa; }
           th {
             background-color: #4CAF50;
             color: white;
             padding: 12px;
             text-align: left;
+            white-space: nowrap;
           }
           td {
             padding: 10px;
@@ -821,28 +837,230 @@ router.get('/status', (req, res) => {
         
         <div class="section">
           <h2>API Keys Statistics (Active)</h2>
+          <div class="controls">
+            <button id="refresh-all" class="btn btn-refresh" onclick="refreshAllBalances()">刷新所有余额</button>
+            <label for="auto-toggle">自动刷新</label>
+            <input type="checkbox" id="auto-toggle" />
+            <label for="auto-mins">间隔(分钟)</label>
+            <input type="number" id="auto-mins" min="1" step="1" placeholder="5" />
+            <span id="auto-next" style="color:#666; font-size: 0.9em;">&nbsp;</span>
+            <label for="skip-threshold" style="margin-left:10px;">跳过阈值(剩余≤)</label>
+            <input type="number" id="skip-threshold" min="0" step="1" placeholder="0" />
+            <label for="batch-size" style="margin-left:10px;">每批数量</label>
+            <input type="number" id="batch-size" min="1" step="1" placeholder="5" />
+            <label for="batch-delay" style="margin-left:10px;">批间隔(秒)</label>
+            <input type="number" id="batch-delay" min="0" step="1" placeholder="1" />
+          </div>
           <table>
             <thead>
               <tr>
-                <th>Key</th>
+                <th class="nowrap">Key</th>
                 <th>Success</th>
                 <th>Fail</th>
                 <th>Total</th>
                 <th>Success Rate</th>
+                <th class="number">Usage %</th>
+                <th class="number">Balance (Remaining / Total)</th>
+                <th class="nowrap">Start</th>
+                <th class="nowrap">End</th>
+                <th class="nowrap">Updated</th>
+                <th class="nowrap" style="width:120px;">Actions</th>
               </tr>
             </thead>
             <tbody>
               ${stats.keys.map(key => `
-                <tr>
-                  <td><code>${key.key}</code></td>
+                <tr id="row-${key.index}" class="${key.depleted ? 'depleted' : ''}">
+                  <td class="nowrap"><code>${key.key}${key.depleted ? '（已用尽）' : ''}</code></td>
                   <td class="success">${key.success}</td>
                   <td class="fail">${key.fail}</td>
                   <td>${key.total}</td>
                   <td class="rate">${key.successRate}</td>
+                  <td id="usage-${key.index}" class="usage number">—</td>
+                  <td id="balance-${key.index}" class="balance number">—</td>
+                  <td id="start-${key.index}" class="date">—</td>
+                  <td id="end-${key.index}" class="date">—</td>
+                  <td id="updated-${key.index}" class="updated">—</td>
+                  <td>
+                    <button id="btn-${key.index}" class="btn btn-refresh" onclick="refreshBalance(${key.index})" ${key.depleted ? 'disabled' : ''}>刷新余额</button>
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
+          <script>
+            function formatNumber(num){
+              if(num===undefined||num===null||Number.isNaN(num)) return '0';
+              try{ return new Intl.NumberFormat('en-US').format(num);}catch(e){return String(num)}
+            }
+            function formatPercentage(ratio){
+              if(ratio===undefined||ratio===null||Number.isNaN(ratio)) return '0.00%';
+              try{ return (ratio*100).toFixed(2)+'%'; }catch(e){ return '0.00%'; }
+            }
+            let currentSkipThreshold = 0;
+            async function refreshBalance(index){
+              const bal = document.getElementById('balance-'+index);
+              const upd = document.getElementById('updated-'+index);
+              const usageCell = document.getElementById('usage-'+index);
+              const startCell = document.getElementById('start-'+index);
+              const endCell = document.getElementById('end-'+index);
+              const row = document.getElementById('row-'+index);
+              const btn = document.getElementById('btn-'+index);
+              if(!bal){return}
+              const prev = bal.textContent;
+              bal.textContent = '加载中...';
+              try{
+                const resp = await fetch('/status/balance/'+index+'?t='+(Date.now()));
+                const data = await resp.json();
+                if(!resp.ok || data.error){ throw new Error(data.error || ('HTTP '+resp.status)); }
+                const total = Number(data.totalAllowance||0);
+                const used  = Number(data.used||0);
+                const remaining = Math.max(0, total - used);
+                bal.textContent = formatNumber(remaining) + ' / ' + formatNumber(total);
+                if(usageCell){ usageCell.textContent = formatPercentage(total>0 ? Math.min(1, used/total) : 0); }
+                if(startCell){ startCell.textContent = data.startDate ? new Date(data.startDate).toLocaleString() : '—'; }
+                if(endCell){ endCell.textContent = data.endDate ? new Date(data.endDate).toLocaleString() : '—'; }
+                if(upd){ upd.textContent = new Date(data.fetchedAt||Date.now()).toLocaleString(); }
+                const dep = remaining <= currentSkipThreshold;
+                if(row){ row.classList.toggle('depleted', dep); }
+                if(btn){ btn.disabled = dep; btn.title = dep ? '已用尽，轮巡中跳过' : ''; }
+              }catch(err){
+                bal.textContent = '错误';
+                if(usageCell){ usageCell.textContent = '—'; }
+                if(startCell){ startCell.textContent = '—'; }
+                if(endCell){ endCell.textContent = '—'; }
+                if(upd){ upd.textContent = err.message; }
+              }
+            }
+            // 批量刷新设置
+            function getBatchSettings(){
+              const size = Math.max(1, Number(localStorage.getItem('batch_size') || 5));
+              const delayMs = Math.max(0, Number(localStorage.getItem('batch_delay_ms') || 1000));
+              return { size, delayMs };
+            }
+            function saveBatchSettings(size, delaySec){
+              const nSize = Math.max(1, Number(size) || 1);
+              const nDelayMs = Math.max(0, Math.round((Number(delaySec) || 0) * 1000));
+              localStorage.setItem('batch_size', String(nSize));
+              localStorage.setItem('batch_delay_ms', String(nDelayMs));
+            }
+            function initBatchControls(){
+              const sizeInput = document.getElementById('batch-size');
+              const delayInput = document.getElementById('batch-delay');
+              const { size, delayMs } = getBatchSettings();
+              if(sizeInput){ sizeInput.value = String(size); sizeInput.addEventListener('change', () => {
+                  const v = Math.max(1, Number(sizeInput.value)||1);
+                  sizeInput.value = String(v);
+                  saveBatchSettings(v, (document.getElementById('batch-delay')?.value)||Math.round(delayMs/1000));
+                });
+              }
+              if(delayInput){ delayInput.value = String(Math.round(delayMs/1000)); delayInput.addEventListener('change', () => {
+                  const v = Math.max(0, Number(delayInput.value)||0);
+                  delayInput.value = String(v);
+                  saveBatchSettings((document.getElementById('batch-size')?.value)||size, v);
+                });
+              }
+            }
+
+            let isRefreshingAll = false;
+            async function refreshAllBalances(){
+              if(isRefreshingAll){ return; }
+              isRefreshingAll = true;
+              try{
+                const rows = Array.from(document.querySelectorAll('tr[id^="row-"]'));
+                const indices = rows
+                  .map(r => { const i = Number((r.id||'').replace('row-','')); return Number.isFinite(i) ? i : null; })
+                  .filter(i => i !== null);
+                const { size, delayMs } = getBatchSettings();
+                for(let i = 0; i < indices.length; i += size){
+                  const batch = indices.slice(i, i + size);
+                  await Promise.all(batch.map(idx => refreshBalance(idx)));
+                  if(i + size < indices.length && delayMs > 0){
+                    await new Promise(r => setTimeout(r, delayMs));
+                  }
+                }
+              } catch(err) {
+                // ignore global error; per-row buttons still work
+              } finally {
+                isRefreshingAll = false;
+              }
+            }
+            // 自动刷新设置
+            let autoTimer = null;
+            function getAutoSettings(){
+              const enabled = localStorage.getItem('auto_enabled') === '1';
+              const ms = Number(localStorage.getItem('auto_ms') || 300000); // 默认5分钟
+              return { enabled, ms };
+            }
+            function saveAutoSettings(enabled, ms){
+              localStorage.setItem('auto_enabled', enabled ? '1' : '0');
+              if(ms && ms > 0){ localStorage.setItem('auto_ms', String(ms)); }
+            }
+            function applyAutoRefresh(){
+              const hint = document.getElementById('auto-next');
+              if(autoTimer){ clearInterval(autoTimer); autoTimer = null; }
+              const { enabled, ms } = getAutoSettings();
+              if(enabled && ms > 0){
+                autoTimer = setInterval(() => {
+                  refreshAllBalances();
+                }, ms);
+                if(hint){ hint.textContent = '每 ' + Math.round(ms/60000) + ' 分钟自动刷新'; }
+              } else {
+                if(hint){ hint.textContent = ''; }
+              }
+            }
+            function initAutoControls(){
+              const toggle = document.getElementById('auto-toggle');
+              const minsInput = document.getElementById('auto-mins');
+              const { enabled, ms } = getAutoSettings();
+              if(toggle){ toggle.checked = !!enabled; toggle.addEventListener('change', () => {
+                  const en = toggle.checked;
+                  const mins = Math.max(1, Number(minsInput.value || Math.round(ms/60000)));
+                  saveAutoSettings(en, mins*60000);
+                  applyAutoRefresh();
+                });
+              }
+              if(minsInput){ minsInput.value = Math.max(1, Math.round(ms/60000)); minsInput.addEventListener('change', () => {
+                  const mins = Math.max(1, Number(minsInput.value||1));
+                  const en = toggle ? toggle.checked : true;
+                  saveAutoSettings(en, mins*60000);
+                  applyAutoRefresh();
+                });
+              }
+              applyAutoRefresh();
+            }
+            // 阈值控制：与服务器同步
+            async function fetchSkipThreshold(){
+              try {
+                const resp = await fetch('/status/skip-threshold?t='+(Date.now()));
+                const data = await resp.json();
+                if(resp.ok && typeof data.skipThreshold === 'number'){
+                  currentSkipThreshold = data.skipThreshold;
+                }
+              } catch(e) {}
+            }
+            async function updateSkipThreshold(n){
+              currentSkipThreshold = Math.max(0, Number(n)||0);
+              try {
+                await fetch('/status/skip-threshold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skipThreshold: currentSkipThreshold }) });
+              } catch(e) {}
+            }
+            function initThresholdControls(){
+              const input = document.getElementById('skip-threshold');
+              fetchSkipThreshold().then(() => { if(input){ input.value = String(currentSkipThreshold); }});
+              if(input){ input.addEventListener('change', () => {
+                  const v = Math.max(0, Number(input.value)||0);
+                  input.value = String(v);
+                  updateSkipThreshold(v).then(() => refreshAllBalances());
+                });
+              }
+            }
+            // 首次进入：不自动刷新余额，仅初始化控件
+            window.addEventListener('load', () => { 
+              initAutoControls();
+              initThresholdControls();
+              initBatchControls();
+            });
+          </script>
         </div>
         
         ${stats.deprecatedKeys && stats.deprecatedKeys.length > 0 ? `
@@ -943,3 +1161,126 @@ router.post('/v1/responses', handleDirectResponses);
 router.post('/v1/messages', handleDirectMessages);
 
 export default router;
+
+// ----------------------
+// Balance query endpoints
+// ----------------------
+// Helper to fetch usage/balance for a single key
+async function fetchUsageForKeyRaw(apiKey) {
+  try {
+    const url = 'https://app.factory.ai/api/organization/members/chat-usage';
+    const configUA = (() => { try { return getConfig()?.user_agent; } catch { return null; } })();
+    const headers = {
+      'Authorization': `Bearer ${apiKey}`,
+      'User-Agent': configUA || 'factory-cli/0.19.3'
+    };
+    const resp = await fetch(url, { method: 'GET', headers });
+    if (!resp.ok) {
+      return { error: `HTTP ${resp.status}` };
+    }
+    const data = await resp.json();
+    const usage = data?.usage;
+    const standard = usage?.standard;
+    if (!standard) {
+      return { error: 'Invalid API response structure' };
+    }
+    const totalAllowance = Number(standard.totalAllowance || 0);
+    const used = Number(standard.orgTotalTokensUsed || 0);
+    const usedRatio = typeof standard.usedRatio === 'number' ? standard.usedRatio : (totalAllowance > 0 ? used / totalAllowance : 0);
+    const startDate = usage?.startDate ? new Date(usage.startDate).toISOString() : null;
+    const endDate = usage?.endDate ? new Date(usage.endDate).toISOString() : null;
+    return {
+      totalAllowance,
+      used,
+      usedRatio,
+      startDate,
+      endDate
+    };
+  } catch (e) {
+    return { error: 'Failed to fetch' };
+  }
+}
+
+// GET /status/balance/:index - fetch balance for specific key by index
+router.get('/status/balance/:index', async (req, res) => {
+  try {
+    const keyManager = getKeyManager();
+    if (!keyManager) {
+      return res.status(400).json({ error: 'Multi-key not configured' });
+    }
+    const idx = parseInt(req.params.index, 10);
+    if (Number.isNaN(idx) || idx < 0 || idx >= keyManager.keys.length) {
+      return res.status(400).json({ error: 'Invalid index' });
+    }
+    const keyObj = keyManager.keys[idx];
+    if (!keyObj || keyObj.deprecated) {
+      return res.status(404).json({ error: 'Key not active' });
+    }
+    const usage = await fetchUsageForKeyRaw(keyObj.key);
+    if (usage.error) {
+      return res.status(200).json({ index: idx, maskedKey: keyManager.maskKey(keyObj.key), error: usage.error, fetchedAt: new Date().toISOString() });
+    }
+    const total = Number(usage.totalAllowance||0);
+    const used = Number(usage.used||0);
+    const remaining = Math.max(0, total - used);
+    // 同步到 KeyManager，余额用尽则在轮询中跳过
+    try { keyManager.setBalanceByIndex(idx, { totalAllowance: total, used, remaining, fetchedAt: new Date().toISOString() }); } catch {}
+    return res.json({ index: idx, maskedKey: keyManager.maskKey(keyObj.key), ...usage, fetchedAt: new Date().toISOString() });
+  } catch (error) {
+    logError('Error in GET /status/balance/:index', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /status/balances - fetch balances for all active keys
+router.get('/status/balances', async (req, res) => {
+  try {
+    const keyManager = getKeyManager();
+    if (!keyManager) {
+      return res.status(400).json({ error: 'Multi-key not configured' });
+    }
+    const tasks = keyManager.keys
+      .map((k, i) => ({ k, i }))
+      .filter(x => !x.k.deprecated)
+      .map(async ({ k, i }) => {
+        const usage = await fetchUsageForKeyRaw(k.key);
+        if (usage.error) {
+          return { index: i, maskedKey: keyManager.maskKey(k.key), error: usage.error, fetchedAt: new Date().toISOString() };
+        }
+        const total = Number(usage.totalAllowance||0);
+        const used = Number(usage.used||0);
+        const remaining = Math.max(0, total - used);
+        try { keyManager.setBalanceByIndex(i, { totalAllowance: total, used, remaining, fetchedAt: new Date().toISOString() }); } catch {}
+        return { index: i, maskedKey: keyManager.maskKey(k.key), ...usage, fetchedAt: new Date().toISOString() };
+      });
+    const list = await Promise.all(tasks);
+    return res.json(list);
+  } catch (error) {
+    logError('Error in GET /status/balances', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Skip-threshold settings (in-memory)
+router.get('/status/skip-threshold', (req, res) => {
+  try {
+    const km = getKeyManager();
+    const value = km ? km.getSkipThreshold?.() ?? 0 : 0;
+    res.json({ skipThreshold: value });
+  } catch (e) {
+    res.status(200).json({ skipThreshold: 0 });
+  }
+});
+
+router.post('/status/skip-threshold', express.json(), (req, res) => {
+  try {
+    const km = getKeyManager();
+    if (!km) return res.status(400).json({ error: 'Multi-key not configured' });
+    const body = req.body || {};
+    const n = body.skipThreshold ?? body.n ?? body.remaining_threshold ?? 0;
+    km.setSkipThreshold?.(Number(n) || 0);
+    res.json({ ok: true, skipThreshold: km.getSkipThreshold?.() ?? 0 });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to set threshold' });
+  }
+});
