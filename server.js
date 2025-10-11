@@ -2,6 +2,7 @@ import express from 'express';
 import { loadConfig, isDevMode, getPort, getRoundRobin, getRemoveOn402 } from './config.js';
 import { logInfo, logError } from './logger.js';
 import router from './routes.js';
+import { serverAuthMiddleware } from './server-auth.js';
 import { initializeAuth } from './auth.js';
 
 const app = express();
@@ -12,13 +13,16 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, anthropic-version');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, X-Server-Key, anthropic-version');
   
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
 });
+
+// Enforce server-wide access key after first-time setup via /status
+app.use(serverAuthMiddleware);
 
 app.use(router);
 

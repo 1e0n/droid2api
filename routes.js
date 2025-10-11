@@ -9,6 +9,7 @@ import { AnthropicResponseTransformer } from './transformers/response-anthropic.
 import { OpenAIResponseTransformer } from './transformers/response-openai.js';
 import { getApiKey, recordRequestResult } from './auth.js';
 import { getKeyManager } from './key-manager.js';
+import { isServerKeySet, setServerKey } from './server-auth.js';
 
 const router = express.Router();
 
@@ -523,6 +524,45 @@ router.get('/status', (req, res) => {
   logInfo('GET /status');
   
   try {
+    // First-visit setup: if no server key yet, present setup form
+    if (!isServerKeySet()) {
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>droid2api Status - Setup</title>
+          <style>
+            body { font-family: Arial, sans-serif; max-width: 720px; margin: 50px auto; padding: 20px; background: #f5f5f5; }
+            h1 { color: #333; text-align: center; }
+            .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            .warn { background: #fff8e1; border-left: 4px solid #FFC107; padding: 12px; margin-bottom: 16px; }
+            label { display: block; margin: 12px 0 6px; color: #555; }
+            input[type="password"], input[type="text"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
+            button { margin-top: 16px; background: #4CAF50; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; }
+            button:hover { background: #43A047; }
+            .hint { color: #666; font-size: 0.9em; margin-top: 8px; }
+            code { background: #eee; padding: 2px 6px; border-radius: 3px; }
+          </style>
+        </head>
+        <body>
+          <h1>droid2api v2.0.0 Status</h1>
+          <div class="card">
+            <div class="warn">
+              <p><strong>First-time setup:</strong> Set a server access key. After saving, all endpoints require this key via header <code>X-Server-Key</code> or query <code>?key=</code>. The /status page remains open.</p>
+            </div>
+            <form method="POST" action="/status/set-key">
+              <label for="key">Server Access Key</label>
+              <input type="password" id="key" name="key" placeholder="Enter a strong key" required />
+              <div class="hint">Remember this key. It will be stored locally on the server.</div>
+              <button type="submit">Save Key</button>
+            </form>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+
     const keyManager = getKeyManager();
     
     if (!keyManager) {
@@ -586,6 +626,7 @@ router.get('/status', (req, res) => {
             color: #333;
             text-align: center;
           }
+          .notice { margin: 10px 0 20px; padding: 10px; background: #e8f5e9; border-left: 4px solid #4CAF50; }
           .section {
             background: white;
             margin: 20px 0;
@@ -734,6 +775,9 @@ router.get('/status', (req, res) => {
         <div class="section">
           <h2>Configuration</h2>
           <div class="info">
+            <div class="notice">
+              <p><strong>Access Control:</strong> Server key is set. Provide header <code>X-Server-Key</code> or query <code>?key=</code> for all endpoints except <code>/status</code>.</p>
+            </div>
             <p><strong>Round-Robin Algorithm:</strong> <code>${stats.algorithm}</code></p>
             <p><strong>Remove on 402:</strong> <code>${stats.removeOn402 ? 'Enabled' : 'Disabled'}</code></p>
             <p><strong>Active Keys:</strong> ${stats.keys.length}</p>
@@ -837,6 +881,53 @@ router.get('/status', (req, res) => {
       error: 'Internal server error',
       message: error.message 
     });
+  }
+});
+
+// First-time key setup endpoint (only works before key is set)
+router.post('/status/set-key', (req, res) => {
+  logInfo('POST /status/set-key');
+  try {
+    if (isServerKeySet()) {
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8"><title>Key Already Set</title></head>
+        <body>
+          <p>Server key has already been set. Go back to <a href="/status">/status</a>.</p>
+        </body>
+        </html>
+      `);
+    }
+    const key = (req.body?.key || '').toString();
+    if (!key || key.trim() === '') {
+      return res.status(400).send('Key is required');
+    }
+    setServerKey(key);
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Key Saved</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 720px; margin: 50px auto; padding: 20px; background: #f5f5f5; }
+          .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          code { background: #eee; padding: 2px 6px; border-radius: 3px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h3>Server key saved successfully.</h3>
+          <p>Use header <code>X-Server-Key</code> or query <code>?key=</code> with this key for all API requests (except <code>/status</code>).</p>
+          <p><a href="/status">Go to Status</a></p>
+        </div>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    logError('Error in POST /status/set-key', error);
+    res.status(500).send('Failed to set key');
   }
 });
 
