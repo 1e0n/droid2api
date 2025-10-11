@@ -3,3 +3,4 @@ node_modules/
 .env
 .DS_Store
 *.txt
+server-key.json
