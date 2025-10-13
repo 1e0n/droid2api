@@ -12,7 +12,9 @@ class KeyManager {
       key: key,
       success: 0,
       fail: 0,
-      deprecated: false // 是否被废弃
+      deprecated: false, // 是否被废弃
+      depleted: false,   // 是否余额用尽
+      balance: null      // 最近一次余额信息 { totalAllowance, used, remaining, fetchedAt }
     }));
     
     this.algorithm = algorithm; // 'weighted' or 'simple'
@@ -20,6 +22,7 @@ class KeyManager {
     this.endpointStats = {}; // 端点统计 { endpoint: { success: 0, fail: 0 } }
     this.removeOn402 = removeOn402; // 是否在402时移除key
     this.deprecatedKeys = []; // 已废弃的key列表
+    this.skipThreshold = 0; // 剩余≤阈值则视为用尽
     
     logInfo(`KeyManager initialized with ${this.keys.length} keys, algorithm: ${this.algorithm}, removeOn402: ${this.removeOn402}`);
   }
@@ -29,7 +32,7 @@ class KeyManager {
    */
   selectKey() {
     // 获取未废弃的key
-    const activeKeys = this.keys.filter(k => !k.deprecated);
+    const activeKeys = this.keys.filter(k => !k.deprecated && !k.depleted);
     
     if (activeKeys.length === 0) {
       throw new Error('No active keys available - all keys have been deprecated');
@@ -129,6 +132,38 @@ class KeyManager {
   }
   
   /**
+   * 更新余额与用尽状态（按索引）
+   * @param {number} index
+   * @param {object} balanceInfo { totalAllowance, used, remaining, fetchedAt }
+   */
+  setBalanceByIndex(index, balanceInfo) {
+    if (typeof index !== 'number' || index < 0 || index >= this.keys.length) return;
+    const k = this.keys[index];
+    if (!k) return;
+    k.balance = balanceInfo || null;
+    if (balanceInfo && typeof balanceInfo.remaining === 'number') {
+      k.depleted = balanceInfo.remaining <= this.skipThreshold;
+    }
+  }
+
+  /**
+   * 设置跳过阈值（剩余≤n 视为用尽）并重算状态
+   */
+  setSkipThreshold(n) {
+    const val = Number(n);
+    this.skipThreshold = Number.isFinite(val) && val >= 0 ? val : 0;
+    for (const k of this.keys) {
+      if (k.balance && typeof k.balance.remaining === 'number') {
+        k.depleted = k.balance.remaining <= this.skipThreshold;
+      }
+    }
+  }
+
+  getSkipThreshold() {
+    return this.skipThreshold;
+  }
+
+  /**
    * 废弃一个key
    * @param {string} key - 要废弃的key
    */
@@ -190,9 +225,10 @@ class KeyManager {
    * 获取统计信息
    */
   getStats() {
-    // 分离活跃的key和废弃的key
-    const activeKeys = this.keys.filter(k => !k.deprecated);
-    const deprecatedKeys = this.keys.filter(k => k.deprecated);
+    // 分离活跃的key和废弃的key（保留原始索引以便在UI中定位）
+    const indexedKeys = this.keys.map((k, idx) => ({ ...k, __index: idx }));
+    const activeKeys = indexedKeys.filter(k => !k.deprecated);
+    const deprecatedKeys = indexedKeys.filter(k => k.deprecated);
     
     return {
       algorithm: this.algorithm,
@@ -204,7 +240,9 @@ class KeyManager {
         total: keyObj.success + keyObj.fail,
         successRate: keyObj.success + keyObj.fail > 0 
           ? ((keyObj.success / (keyObj.success + keyObj.fail)) * 100).toFixed(2) + '%'
-          : 'N/A'
+          : 'N/A',
+        index: keyObj.__index,
+        depleted: !!keyObj.depleted
       })),
       deprecatedKeys: deprecatedKeys.map(keyObj => ({
         key: this.maskKey(keyObj.key),
@@ -214,7 +252,8 @@ class KeyManager {
         successRate: keyObj.success + keyObj.fail > 0 
           ? ((keyObj.success / (keyObj.success + keyObj.fail)) * 100).toFixed(2) + '%'
           : 'N/A',
-        deprecatedAt: this.deprecatedKeys.find(dk => dk.key === keyObj.key)?.deprecatedAt || 'Unknown'
+        deprecatedAt: this.deprecatedKeys.find(dk => dk.key === keyObj.key)?.deprecatedAt || 'Unknown',
+        index: keyObj.__index
       })),
       endpoints: Object.entries(this.endpointStats)
         .filter(([_, stats]) => stats.success > 0 || stats.fail > 0)
