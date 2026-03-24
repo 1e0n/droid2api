@@ -69,6 +69,11 @@ export function getModelProvider(modelId) {
   return model?.provider || null;
 }
 
+export function getModelFast(modelId) {
+  const model = getModelById(modelId);
+  return model?.fast === true;
+}
+
 export function getUserAgent() {
   return getCurrentUserAgent();
 }

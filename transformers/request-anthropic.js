@@ -1,5 +1,5 @@
 import { logDebug } from '../logger.js';
-import { getSystemPrompt, getModelReasoning, getUserAgent } from '../config.js';
+import { getSystemPrompt, getModelReasoning, getModelFast, getUserAgent } from '../config.js';
 
 export function transformToAnthropic(openaiRequest) {
   logDebug('Transforming OpenAI request to Anthropic format');
@@ -200,6 +200,14 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
     betaValues = betaValues.filter(v => v !== thinkingBeta);
   }
   
+  // Add fast-mode beta if model has fast enabled
+  const fastModeBeta = 'fast-mode-2026-02-01';
+  if (modelId && getModelFast(modelId)) {
+    if (!betaValues.includes(fastModeBeta)) {
+      betaValues.push(fastModeBeta);
+    }
+  }
+
   // Set anthropic-beta header if there are any values
   if (betaValues.length > 0) {
     headers['anthropic-beta'] = betaValues.join(', ');

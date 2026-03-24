@@ -1,4 +1,5 @@
 node_modules/
+.factory/
 *.log
 .env
 .DS_Store
