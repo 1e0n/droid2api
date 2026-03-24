@@ -1,5 +1,5 @@
 import { logDebug } from '../logger.js';
-import { getSystemPrompt, getModelReasoning, getUserAgent } from '../config.js';
+import { getSystemPrompt, getModelReasoning, getModelFast, getUserAgent } from '../config.js';
 
 export function transformToOpenAI(openaiRequest) {
   logDebug('Transforming OpenAI request to target OpenAI format');
@@ -110,6 +110,13 @@ export function transformToOpenAI(openaiRequest) {
     // Off or invalid: explicitly remove reasoning field
     // This ensures any reasoning field from the original request is deleted
     delete targetRequest.reasoning;
+  }
+
+  // Add service_tier for fast models if not already set
+  if (getModelFast(openaiRequest.model) && openaiRequest.service_tier === undefined) {
+    targetRequest.service_tier = 'priority';
+  } else if (openaiRequest.service_tier !== undefined) {
+    targetRequest.service_tier = openaiRequest.service_tier;
   }
 
   // Pass through other parameters

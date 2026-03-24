@@ -71,6 +71,14 @@
       "provider": "openai"
     },
     {
+      "name": "GPT-5.4 Fast",
+      "id": "gpt-5.4-fast",
+      "type": "openai",
+      "reasoning": "auto",
+      "fast":true,
+      "provider": "openai"
+    },
+    {
       "name": "GPT-5.3 Codex",
       "id": "gpt-5.3-codex",
       "type": "openai",
