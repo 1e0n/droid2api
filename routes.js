@@ -52,6 +52,49 @@ function convertResponseToChatCompletion(resp) {
   return chatCompletion;
 }
 
+function convertGoogleResponseToChatCompletion(resp, modelId) {
+  if (!resp || typeof resp !== 'object') {
+    throw new Error('Invalid response object');
+  }
+
+  const candidate = resp.candidates?.[0];
+  const parts = candidate?.content?.parts || [];
+  // Filter out thought parts, extract text
+  const content = parts
+    .filter(p => p.thought !== true)
+    .map(p => p.text || '')
+    .join('');
+
+  const finishReasonMap = {
+    'STOP': 'stop',
+    'MAX_TOKENS': 'length',
+    'SAFETY': 'content_filter',
+    'RECITATION': 'content_filter'
+  };
+
+  return {
+    id: `chatcmpl-${Date.now()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: modelId || resp.modelVersion || 'unknown-model',
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: content || ''
+        },
+        finish_reason: finishReasonMap[candidate?.finishReason] || 'stop'
+      }
+    ],
+    usage: {
+      prompt_tokens: resp.usageMetadata?.promptTokenCount ?? 0,
+      completion_tokens: resp.usageMetadata?.candidatesTokenCount ?? 0,
+      total_tokens: resp.usageMetadata?.totalTokenCount ?? 0
+    }
+  };
+}
+
 router.get('/v1/models', (req, res) => {
   logInfo('GET /v1/models');
   
@@ -177,7 +220,7 @@ async function handleChatCompletions(req, res) {
       });
     }
 
-    const isStreaming = transformedRequest.stream === true;
+    const isStreaming = openaiRequest.stream === true;
 
     if (isStreaming) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -226,12 +269,20 @@ async function handleChatCompletions(req, res) {
           logResponse(200, null, converted);
           res.json(converted);
         } catch (e) {
-          // 如果转换失败，回退为原始数据
+          logResponse(200, null, data);
+          res.json(data);
+        }
+      } else if (model.type === 'google') {
+        try {
+          const converted = convertGoogleResponseToChatCompletion(data, modelId);
+          logResponse(200, null, converted);
+          res.json(converted);
+        } catch (e) {
           logResponse(200, null, data);
           res.json(data);
         }
       } else {
-        // anthropic/common/google: 保持现有逻辑，直接转发
+        // anthropic/common: 保持现有逻辑，直接转发
         logResponse(200, null, data);
         res.json(data);
       }

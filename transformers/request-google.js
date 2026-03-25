@@ -9,10 +9,6 @@ export function transformToGoogle(openaiRequest) {
     contents: []
   };
 
-  if (openaiRequest.stream !== undefined) {
-    googleRequest.stream = openaiRequest.stream;
-  }
-
   // Collect system parts: config system prompt first, then user system messages
   let systemParts = [];
   const systemPrompt = getSystemPrompt();
