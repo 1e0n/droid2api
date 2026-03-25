@@ -19,7 +19,14 @@ OpenAI 兼容的 API 代理服务器，统一访问不同的 LLM 模型。
 - **固定级别** - off/low/medium/high强制覆盖客户端推理设置
 - **OpenAI模型** - 自动注入reasoning字段，effort参数控制推理强度
 - **Anthropic模型** - 自动配置thinking字段和budget_tokens (4096/12288/24576)
+- **Google模型** - 自动配置thinkingConfig中的thinkingLevel (LOW/MEDIUM/HIGH)
 - **智能头管理** - 根据推理级别自动添加/移除anthropic-beta相关标识
+
+### ⚡ Fast模式支持
+- **Anthropic模型** - 自动在anthropic-beta请求头中添加`fast-mode-2026-02-01`标识
+- **OpenAI模型** - 自动在请求体中注入`"service_tier": "priority"`字段
+- **按需启用** - 通过模型配置的`fast`字段控制，默认关闭
+- **兼容上游** - 不覆盖客户端已有的相关字段
 
 ### 🚀 服务器部署/Docker部署
 - **本地服务器** - 支持npm start快速启动
@@ -28,8 +35,14 @@ OpenAI 兼容的 API 代理服务器，统一访问不同的 LLM 模型。
 - **环境隔离** - Docker部署确保依赖环境的完全一致性
 - **生产就绪** - 包含健康检查、日志管理等生产级特性
 
+### 🌐 Google Gemini模型支持
+- **原生格式转发** - /v1/generate端点直接转发Google格式请求
+- **智能格式转换** - /v1/chat/completions端点自动将OpenAI格式转为Google格式
+- **推理级别控制** - 支持通过thinkingLevel配置思考程度
+- **流式响应转换** - 自动将Google流式响应转为OpenAI兼容格式
+
 ### 💻 Claude Code直接使用
-- **透明代理模式** - /v1/responses和/v1/messages端点支持直接转发
+- **透明代理模式** - /v1/responses、/v1/messages和/v1/generate端点支持直接转发
 - **完美兼容** - 与Claude Code CLI工具无缝集成
 - **系统提示注入** - 自动添加Droid身份标识，保持上下文一致性
 - **请求头标准化** - 自动添加Factory特定的认证和会话头信息
@@ -135,9 +148,9 @@ export DROID_REFRESH_KEY="your_refresh_token_here"
 
 - **`auto`** - 遵循客户端原始请求，不做任何推理参数修改
 - **`off`** - 强制关闭推理功能，删除所有推理字段
-- **`low`** - 低级推理 (Anthropic: 4096 tokens, OpenAI: low effort)
-- **`medium`** - 中级推理 (Anthropic: 12288 tokens, OpenAI: medium effort) 
-- **`high`** - 高级推理 (Anthropic: 24576 tokens, OpenAI: high effort)
+- **`low`** - 低级推理 (Anthropic: 4096 tokens, OpenAI: low effort, Google: LOW)
+- **`medium`** - 中级推理 (Anthropic: 12288 tokens, OpenAI: medium effort, Google: MEDIUM) 
+- **`high`** - 高级推理 (Anthropic: 24576 tokens, OpenAI: high effort, Google: HIGH)
 
 **对于Anthropic模型 (Claude)**：
 ```json
@@ -162,6 +175,34 @@ export DROID_REFRESH_KEY="your_refresh_token_here"
 ```
 - `auto`: 保留客户端reasoning字段不变
 - `low/medium/high`: 自动添加reasoning字段，effort参数设置为对应级别
+
+**对于Google模型 (Gemini)**：
+```json
+{
+  "name": "Gemini 3 Flash",
+  "id": "gemini-3-flash-preview",
+  "type": "google",
+  "reasoning": "auto"  // 推荐：让客户端控制推理
+}
+```
+- `auto`: 保留客户端thinkingConfig字段不变
+- `low/medium/high`: 自动设置thinkingLevel为LOW/MEDIUM/HIGH
+
+#### Fast模式配置
+
+为模型添加 `"fast": true` 可启用Fast模式，加速响应。默认为 `false`，不设置时不启用。
+
+**示例**：
+```json
+{
+  "name": "Opus 4.6 Fast",
+  "id": "claude-opus-4-6-fast",
+  "type": "anthropic",
+  "reasoning": "auto",
+  "fast": true,
+  "provider": "anthropic"
+}
+```
 
 ## 使用方法
 
@@ -236,6 +277,7 @@ Docker部署支持以下环境变量：
    - `/v1/chat/completions` - 标准OpenAI格式，自动格式转换
    - `/v1/responses` - 直接转发到OpenAI端点（透明代理）
    - `/v1/messages` - 直接转发到Anthropic端点（透明代理）
+   - `/v1/generate` - 直接转发到Google端点（透明代理）
    - `/v1/models` - 获取可用模型列表
 
 3. **自动功能**：
@@ -430,6 +472,7 @@ Token refreshed successfully, expires at: 2025-01-XX XX:XX:XX
 **推理字段对应关系**：
 - OpenAI模型 (`gpt-*`) → 使用 `reasoning` 字段
 - Anthropic模型 (`claude-*`) → 使用 `thinking` 字段
+- Google模型 (`gemini-*`) → 使用 `thinkingConfig.thinkingLevel` 字段
 
 ### 如何更改端口？
 

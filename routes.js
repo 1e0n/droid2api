@@ -5,8 +5,10 @@ import { logInfo, logDebug, logError, logRequest, logResponse } from './logger.j
 import { transformToAnthropic, getAnthropicHeaders } from './transformers/request-anthropic.js';
 import { transformToOpenAI, getOpenAIHeaders } from './transformers/request-openai.js';
 import { transformToCommon, getCommonHeaders } from './transformers/request-common.js';
+import { transformToGoogle, getGoogleHeaders } from './transformers/request-google.js';
 import { AnthropicResponseTransformer } from './transformers/response-anthropic.js';
 import { OpenAIResponseTransformer } from './transformers/response-openai.js';
+import { GoogleResponseTransformer } from './transformers/response-google.js';
 import { getApiKey } from './auth.js';
 import { getNextProxyAgent } from './proxy-manager.js';
 
@@ -139,6 +141,9 @@ async function handleChatCompletions(req, res) {
     } else if (model.type === 'openai') {
       transformedRequest = transformToOpenAI(requestWithRedirectedModel);
       headers = getOpenAIHeaders(authHeader, clientHeaders, provider);
+    } else if (model.type === 'google') {
+      transformedRequest = transformToGoogle(requestWithRedirectedModel);
+      headers = getGoogleHeaders(authHeader, clientHeaders, provider);
     } else if (model.type === 'common') {
       transformedRequest = transformToCommon(requestWithRedirectedModel);
       headers = getCommonHeaders(authHeader, clientHeaders, provider);
@@ -198,6 +203,8 @@ async function handleChatCompletions(req, res) {
           transformer = new AnthropicResponseTransformer(modelId, `chatcmpl-${Date.now()}`);
         } else if (model.type === 'openai') {
           transformer = new OpenAIResponseTransformer(modelId, `chatcmpl-${Date.now()}`);
+        } else if (model.type === 'google') {
+          transformer = new GoogleResponseTransformer(modelId, `chatcmpl-${Date.now()}`);
         }
 
         try {
@@ -224,7 +231,7 @@ async function handleChatCompletions(req, res) {
           res.json(data);
         }
       } else {
-        // anthropic/common: 保持现有逻辑，直接转发
+        // anthropic/common/google: 保持现有逻辑，直接转发
         logResponse(200, null, data);
         res.json(data);
       }
@@ -638,10 +645,159 @@ async function handleCountTokens(req, res) {
   }
 }
 
+// 直接转发 Google 请求（不做格式转换）
+async function handleDirectGenerate(req, res) {
+  logInfo('POST /v1/generate');
+
+  try {
+    const googleRequest = req.body;
+    const modelId = getRedirectedModelId(googleRequest.model);
+
+    if (!modelId) {
+      return res.status(400).json({ error: 'model is required' });
+    }
+
+    const model = getModelById(modelId);
+    if (!model) {
+      return res.status(404).json({ error: `Model ${modelId} not found` });
+    }
+
+    // 只允许 google 类型端点
+    if (model.type !== 'google') {
+      return res.status(400).json({
+        error: 'Invalid endpoint type',
+        message: `/v1/generate 接口只支持 google 类型端点，当前模型 ${modelId} 是 ${model.type} 类型`
+      });
+    }
+
+    const endpoint = getEndpointByType(model.type);
+    if (!endpoint) {
+      return res.status(500).json({ error: `Endpoint type ${model.type} not found` });
+    }
+
+    logInfo(`Direct forwarding to ${model.type} endpoint: ${endpoint.base_url}`);
+
+    let authHeader;
+    try {
+      authHeader = await getApiKey(req.headers.authorization);
+    } catch (error) {
+      logError('Failed to get API key', error);
+      return res.status(500).json({
+        error: 'API key not available',
+        message: 'Failed to get or refresh API key. Please check server logs.'
+      });
+    }
+
+    const clientHeaders = req.headers;
+
+    // Get provider from model config
+    const provider = getModelProvider(modelId);
+
+    const headers = getGoogleHeaders(authHeader, clientHeaders, provider);
+
+    // 注入系统提示到 systemInstruction 字段，并更新重定向后的模型ID
+    const systemPrompt = getSystemPrompt();
+    const modifiedRequest = { ...googleRequest, model: modelId };
+    if (systemPrompt) {
+      if (modifiedRequest.systemInstruction && modifiedRequest.systemInstruction.parts && Array.isArray(modifiedRequest.systemInstruction.parts)) {
+        // 在 parts 数组最前面插入系统提示
+        modifiedRequest.systemInstruction = {
+          ...modifiedRequest.systemInstruction,
+          parts: [
+            { text: systemPrompt },
+            ...modifiedRequest.systemInstruction.parts
+          ]
+        };
+      } else {
+        modifiedRequest.systemInstruction = {
+          parts: [{ text: systemPrompt }]
+        };
+      }
+    }
+
+    // 处理 thinkingConfig.thinkingLevel 字段
+    const reasoningLevel = getModelReasoning(modelId);
+    if (reasoningLevel === 'auto') {
+      // Auto模式：保持原始请求的 thinkingConfig 字段不变
+    } else if (reasoningLevel && ['low', 'medium', 'high'].includes(reasoningLevel)) {
+      const levelMap = { 'low': 'LOW', 'medium': 'MEDIUM', 'high': 'HIGH' };
+      if (!modifiedRequest.generationConfig) {
+        modifiedRequest.generationConfig = {};
+      }
+      if (!modifiedRequest.generationConfig.thinkingConfig) {
+        modifiedRequest.generationConfig.thinkingConfig = {};
+      }
+      modifiedRequest.generationConfig.thinkingConfig.thinkingLevel = levelMap[reasoningLevel];
+    } else {
+      // 如果配置是off或无效，移除 thinkingConfig 字段
+      if (modifiedRequest.generationConfig) {
+        delete modifiedRequest.generationConfig.thinkingConfig;
+      }
+    }
+
+    logRequest('POST', endpoint.base_url, headers, modifiedRequest);
+
+    const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
+    const fetchOptions = {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(modifiedRequest)
+    };
+
+    if (proxyAgentInfo?.agent) {
+      fetchOptions.agent = proxyAgentInfo.agent;
+    }
+
+    const response = await fetch(endpoint.base_url, fetchOptions);
+
+    logInfo(`Response status: ${response.status}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logError(`Endpoint error: ${response.status}`, new Error(errorText));
+      return res.status(response.status).json({
+        error: `Endpoint returned ${response.status}`,
+        details: errorText
+      });
+    }
+
+    const isStreaming = googleRequest.stream === true;
+
+    if (isStreaming) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      try {
+        for await (const chunk of response.body) {
+          res.write(chunk);
+        }
+        res.end();
+        logInfo('Stream forwarded successfully');
+      } catch (streamError) {
+        logError('Stream error', streamError);
+        res.end();
+      }
+    } else {
+      const data = await response.json();
+      logResponse(200, null, data);
+      res.json(data);
+    }
+
+  } catch (error) {
+    logError('Error in /v1/generate', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+}
+
 // 注册路由
 router.post('/v1/chat/completions', handleChatCompletions);
 router.post('/v1/responses', handleDirectResponses);
 router.post('/v1/messages', handleDirectMessages);
 router.post('/v1/messages/count_tokens', handleCountTokens);
+router.post('/v1/generate', handleDirectGenerate);
 
 export default router;
